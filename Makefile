@@ -10,6 +10,6 @@ endif
 .PHONY: test
 test:
 	mkdir -p .cache
-	BATS_LIB_PATH=$(BATS_LIB_PATH) GITHUB_REPOSITORY_OWNER=aquasecurity\
+	BATS_LIB_PATH=$(BATS_LIB_PATH) GITHUB_REPOSITORY_OWNER=khulnasoft\
 	  TUNNEL_CACHE_DIR=.cache TUNNEL_DISABLE_VEX_NOTICE=true TUNNEL_DEBUG=true\
 	  bats --recursive --timing --verbose-run .
