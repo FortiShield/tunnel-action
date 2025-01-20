@@ -1,200 +1,56 @@
 #!/bin/bash
-set -e
-while getopts "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:z:" o; do
-   case "${o}" in
-       a)
-         export scanType=${OPTARG}
-       ;;
-       b)
-         export format=${OPTARG}
-       ;;
-       c)
-         export template=${OPTARG}
-       ;;
-       d)
-         export exitCode=${OPTARG}
-       ;;
-       e)
-         export ignoreUnfixed=${OPTARG}
-       ;;
-       f)
-         export vulnType=${OPTARG}
-       ;;
-       g)
-         export severity=${OPTARG}
-       ;;
-       h)
-         export output=${OPTARG}
-       ;;
-       i)
-         export imageRef=${OPTARG}
-       ;;
-       j)
-         export scanRef=${OPTARG}
-       ;;
-       k)
-         export skipDirs=${OPTARG}
-       ;;
-       l)
-         export input=${OPTARG}
-       ;;
-       m)
-         export cacheDir=${OPTARG}
-       ;;
-       n)
-         export timeout=${OPTARG}
-       ;;
-       o)
-         export ignorePolicy=${OPTARG}
-       ;;
-       p)
-         export hideProgress=${OPTARG}
-       ;;
-       q)
-         export skipFiles=${OPTARG}
-       ;;
-       r)
-         export listAllPkgs=${OPTARG}
-       ;;
-       s)
-         export scanners=${OPTARG}
-       ;;
-       t)
-         export tunnelIgnores=${OPTARG}
-       ;;
-       u)
-         export githubPAT=${OPTARG}
-       ;;
-       v)
-         export tunnelConfig=${OPTARG}
-       ;;
-       z)
-         export limitSeveritiesForSARIF=${OPTARG}
-       ;;
-  esac
-done
+set -euo pipefail
 
-
-scanType=$(echo $scanType | tr -d '\r')
-export artifactRef="${imageRef}"
-if [ "${scanType}" = "repo" ] || [ "${scanType}" = "fs" ] || [ "${scanType}" = "filesystem" ] ||  [ "${scanType}" = "config" ] ||  [ "${scanType}" = "rootfs" ];then
-  artifactRef=$(echo $scanRef | tr -d '\r')
-fi
-input=$(echo $input | tr -d '\r')
-if [ $input ]; then
-  artifactRef="--input $input"
-fi
-#trim leading spaces for boolean params
-ignoreUnfixed=$(echo $ignoreUnfixed | tr -d '\r')
-hideProgress=$(echo $hideProgress | tr -d '\r')
-limitSeveritiesForSARIF=$(echo $limitSeveritiesForSARIF | tr -d '\r')
-
-GLOBAL_ARGS=""
-if [ $cacheDir ];then
-  GLOBAL_ARGS="$GLOBAL_ARGS --cache-dir $cacheDir"
+# Set artifact reference
+scanType="${INPUT_SCAN_TYPE:-image}"
+scanRef="${INPUT_SCAN_REF:-.}"
+if [ -n "${INPUT_IMAGE_REF:-}" ]; then
+  scanRef="${INPUT_IMAGE_REF}" # backwards compatibility
 fi
 
-SARIF_ARGS=""
-ARGS=""
-format=$(echo $format | xargs)
-if [ $format ];then
- ARGS="$ARGS --format $format"
-fi
-if [ $template ] ;then
- ARGS="$ARGS --template $template"
-fi
-if [ $exitCode ];then
- ARGS="$ARGS --exit-code $exitCode"
- SARIF_ARGS="$SARIF_ARGS --exit-code $exitCode"
-fi
-if [ "$ignoreUnfixed" == "true" ] && [ "$scanType" != "config" ];then
-  ARGS="$ARGS --ignore-unfixed"
-  SARIF_ARGS="$SARIF_ARGS --ignore-unfixed"
-fi
-if [ $vulnType ] && [ "$scanType" != "config" ] && [ "$scanType" != "sbom" ];then
-  ARGS="$ARGS --vuln-type $vulnType"
-  SARIF_ARGS="$SARIF_ARGS --vuln-type $vulnType"
-fi
-if [ $scanners ];then
-  ARGS="$ARGS --scanners $scanners"
-  SARIF_ARGS="$SARIF_ARGS --scanners $scanners"
-fi
-if [ $severity ];then
-  ARGS="$ARGS --severity $severity"
-fi
-if [ $output ];then
-  ARGS="$ARGS --output $output"
-fi
-if [ $skipDirs ];then
-  for i in $(echo $skipDirs | tr "," "\n")
-  do
-    ARGS="$ARGS --skip-dirs $i"
-    SARIF_ARGS="$SARIF_ARGS --skip-dirs $i"
-  done
-fi
-if [ $tunnelIgnores ];then
-  for f in $(echo $tunnelIgnores | tr "," "\n")
-  do
+# Handle tunnel ignores
+if [ -n "${INPUT_TUNNELIGNORES:-}" ]; then
+  ignorefile="./tunnelignores"
+
+  # Clear the ignore file if it exists, or create a new empty file
+  : > "$ignorefile"
+
+  for f in ${INPUT_TUNNELIGNORES//,/ }; do
     if [ -f "$f" ]; then
       echo "Found ignorefile '${f}':"
       cat "${f}"
-      cat "${f}" >> ./tunnelignores
+      cat "${f}" >> "$ignorefile"
     else
-      echo "ERROR: cannot find ignorefile '${f}'."
+      echo "ERROR: cannot find ignorefile '${f}'." >&2
       exit 1
     fi
   done
-  ARGS="$ARGS --ignorefile ./tunnelignores"
-fi
-if [ $timeout ];then
-  ARGS="$ARGS --timeout $timeout"
-  SARIF_ARGS="$SARIF_ARGS --timeout $timeout"
-fi
-if [ $ignorePolicy ];then
-  ARGS="$ARGS --ignore-policy $ignorePolicy"
-  SARIF_ARGS="$SARIF_ARGS --ignore-policy $ignorePolicy"
-fi
-if [ "$hideProgress" == "true" ];then
-  ARGS="$ARGS --no-progress"
+  export TUNNEL_IGNOREFILE="$ignorefile"
 fi
 
-listAllPkgs=$(echo $listAllPkgs | tr -d '\r')
-if [ "$listAllPkgs" == "true" ];then
-  ARGS="$ARGS --list-all-pkgs"
-fi
-if [ "$skipFiles" ];then
-  for i in $(echo $skipFiles | tr "," "\n")
-  do
-    ARGS="$ARGS --skip-files $i"
-  done
+# Handle SARIF
+if [ "${TUNNEL_FORMAT:-}" = "sarif" ]; then
+  if [ "${INPUT_LIMIT_SEVERITIES_FOR_SARIF:-false,,}" != "true" ]; then
+    echo "Building SARIF report with all severities"
+    unset TUNNEL_SEVERITY
+  else
+    echo "Building SARIF report"
+  fi
 fi
 
-tunnelConfig=$(echo $tunnelConfig | tr -d '\r')
-# To make sure that uploda GitHub Dependency Snapshot succeeds, disable the script that fails first.
-set +e
-if [ "${format}" == "sarif" ] && [ "${limitSeveritiesForSARIF}" != "true" ]; then
-  # SARIF is special. We output all vulnerabilities,
-  # regardless of severity level specified in this report.
-  # This is a feature, not a bug :)
-  echo "Building SARIF report with options: ${SARIF_ARGS}" "${artifactRef}"
-  tunnel --quiet ${scanType} --format sarif --output ${output} $SARIF_ARGS ${artifactRef}
-elif [ $tunnelConfig ]; then
-   echo "Running Tunnel with tunnel.yaml config from: " $tunnelConfig
-   tunnel --config $tunnelConfig ${scanType} ${artifactRef}
-else
-   echo "Running tunnel with options: tunnel ${scanType} ${ARGS}" "${artifactRef}"
-   echo "Global options: " "${GLOBAL_ARGS}"
-   tunnel $GLOBAL_ARGS ${scanType} ${ARGS} ${artifactRef}
-fi
+# Run Tunnel
+cmd=(tunnel "$scanType" "$scanRef")
+echo "Running Tunnel with options: ${cmd[*]}"
+"${cmd[@]}"
 returnCode=$?
 
-set -e
-if [[ "${format}" == "github" ]]; then
-  if [[ "$(echo $githubPAT | xargs)" != "" ]]; then
+if [ "${TUNNEL_FORMAT:-}" = "github" ]; then
+  if [ -n "${INPUT_GITHUB_PAT:-}" ]; then
     printf "\n Uploading GitHub Dependency Snapshot"
-    curl -H 'Accept: application/vnd.github+json' -H "Authorization: token $githubPAT" 'https://api.github.com/repos/'$GITHUB_REPOSITORY'/dependency-graph/snapshots' -d @./$(echo $output | xargs)
+    curl -H 'Accept: application/vnd.github+json' -H "Authorization: token ${INPUT_GITHUB_PAT}" \
+         "https://api.github.com/repos/$GITHUB_REPOSITORY/dependency-graph/snapshots" -d @"${TUNNEL_OUTPUT:-}"
   else
-    printf "\n Failing GitHub Dependency Snapshot. Missing github-pat"
+    printf "\n Failing GitHub Dependency Snapshot. Missing github-pat" >&2
   fi
 fi
 
